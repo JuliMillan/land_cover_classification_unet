@@ -9,7 +9,7 @@ torch.autograd.set_detect_anomaly(True)
 
 class UNet(nn.Module):
     def __init__(self, n_channels, n_classes, bilinear=True):
-        super(UNet, self).__init__()
+        super().__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
         self.bilinear = bilinear
@@ -40,62 +40,29 @@ class UNet(nn.Module):
         # self.outc = OutConv(64, n_classes)
 
     def forward(self, x):
-        # GPUtil.showUtilization()
-        # print("Base")
+        # Ensure input is float32 for MPS compatibility
+        if x.device.type == 'mps':
+            x = x.to(torch.float32)
+            
         assert torch.isfinite(x).all()
         x1 = self.inc(x)
         assert torch.isfinite(x1).all()
-        # GPUtil.showUtilization()
-        # print("After x1")
         x2 = self.down1(x1)
         assert torch.isfinite(x2).all()
-        # GPUtil.showUtilization()
-        # print("After x2")
         x3 = self.down2(x2)
         assert torch.isfinite(x3).all()
-        # GPUtil.showUtilization()
-        # print("After x3")
         x4 = self.down3(x3)
         assert torch.isfinite(x4).all()
-        # GPUtil.showUtilization()
-        # print("After x4")
         x5 = self.down4(x4)
         assert torch.isfinite(x5).all()
-        # GPUtil.showUtilization()
-        # print("After x5")
         x = self.up1(x5, x4)
         assert torch.isfinite(x).all()
-        # GPUtil.showUtilization()
-        # print("After xup1")
-        # del x5
-        # del x4
-        # torch.cuda.empty_cache()
-        # GPUtil.showUtilization()
-        # print("After x5,x4 delete")
         x = self.up2(x, x3)
         assert torch.isfinite(x).all()
-        # GPUtil.showUtilization()
-        # print("After xup2")
-        # del x3
-        # torch.cuda.empty_cache()
-        # GPUtil.showUtilization()
-        # print("After x3 delete")
         x = self.up3(x, x2)
         assert torch.isfinite(x).all()
-        # GPUtil.showUtilization()
-        # print("After xup3")
-        # del x2
-        # torch.cuda.empty_cache()
-        # GPUtil.showUtilization()
-        # print("After x2 delete")
         x = self.up4(x, x1)
         assert torch.isfinite(x).all()
-        # GPUtil.showUtilization()
-        # print("After xup4")
-        # del x1
-        # torch.cuda.empty_cache()
-        # GPUtil.showUtilization()
-        # print("After x1 delete")
         logits = self.outc(x)
         assert torch.isfinite(logits).all()
         return logits

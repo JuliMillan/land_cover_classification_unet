@@ -1,11 +1,7 @@
-INTERRUPTED.pth
-__pycache__/*
-data/imgs_/*
-data/masks_/*
-runs/*
-!runs/.gitkeep
-!checkpoints/.gitkeep
-README.md
-submit.py
+data
+data/
+data1
+data1/
+*/__pycache__
+metrics.txt
 .ipynb_checkpoints/*
-.idea/*

@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import glob
 
 import numpy as np
 import torch
@@ -12,7 +13,6 @@ from unet import UNet
 from utils.data_vis import plot_img_and_mask
 from utils.dataset import BasicDataset
 import matplotlib.pyplot as plt
-import glob
 from torch.utils.data import DataLoader
 
 
@@ -23,14 +23,14 @@ def predict_img(net,
                 out_threshold=0.5):
     net.eval()
 
-    img = torch.from_numpy(BasicDataset.preprocess(full_img, scale_factor))
-
+    img = torch.from_numpy(BasicDataset.preprocess(full_img, scale_factor)).float()
+    #print("Input image shape:", img.shape)
     img = img.unsqueeze(0)
     img = img.to(device=device, dtype=torch.float32)
 
     with torch.no_grad():
         output = net(img)
-        # print(output)
+        #print("Output shape:", output.shape)
         if net.n_classes > 1:
             probs = F.softmax(output, dim=1)
         else:
@@ -39,39 +39,25 @@ def predict_img(net,
         probs = probs.squeeze(0)
 
         height, width = probs.shape[1], probs.shape[2]
-
-        ## convert probabilities to class index and then to RGB
-        ###################################################
-        mapping = {0: (0  , 255, 255),     #urban_land
-                   1: (255, 255, 0  ),     #agriculture
-                   2: (255, 0  , 255),     #rangeland
-                   3: (0  , 255, 0  ),     #forest_land
-                   4: (0  , 0  , 255),     #water
-                   5: (255, 255, 255),     #barren_land
-                   6: (0  , 0  , 0  )}     #unknown
         class_idx = torch.argmax(probs, dim=0)
-        image = torch.zeros(height, width, 3, dtype=torch.uint8)
+        image = torch.zeros(height, width, 3, dtype=torch.uint8, device=device)
 
-        for k in mapping:
-          
-          idx = (class_idx == torch.tensor(k, dtype=torch.uint8))
-          validx = (idx == 1)
-          image[validx,:] = torch.tensor(mapping[k], dtype=torch.uint8)
-                 
-        image = image.permute(2, 0, 1)
+        mapping = {
+            0: (0  , 255, 255),     #urban_land
+            1: (255, 255, 0  ),     #agriculture
+            2: (255, 0  , 255),     #rangeland
+            3: (0  , 255, 0  ),     #forest_land
+            4: (0  , 0  , 255),     #water
+            5: (255, 255, 255),     #barren_land
+            6: (0  , 0  , 0  )      #unknown
+        }
 
-        tf = transforms.Compose(
-            [
-                transforms.ToPILImage(),
-                transforms.Resize(full_img.size[1]),
-                transforms.ToTensor()
-            ]
-        )
+        for k, v in mapping.items():
+            idx = (class_idx == k)
+            image[idx] = torch.tensor(v, dtype=torch.uint8, device=device)
 
-        image = image.permute(1,2,0)
-        image = image.squeeze().cpu().numpy()
-
-    return image, class_idx
+        image = image.cpu()
+        return image.numpy(), class_idx.cpu()
 
 def preprocess_mask(pil_img, scale):
         w, h = pil_img.size
@@ -89,30 +75,45 @@ def preprocess_mask(pil_img, scale):
         torch.set_printoptions(edgeitems=10)
         return img_trans
 
+def predict_folder(net, input_folder, output_folder, device, scale_factor=1):
+    """Predict segmentation for all images in the input folder"""
+    os.makedirs(output_folder, exist_ok=True)
+    
+    # Get all image files from input folder
+    image_files = glob.glob(os.path.join(input_folder, '*'))
+    logging.info(f'Found {len(image_files)} images in {input_folder}')
+
+    for i, fn in enumerate(image_files):
+        logging.info(f"\nPredicting image {i+1}/{len(image_files)}: {fn}")
+
+        img = Image.open(fn)
+        
+        # Get filename without path and extension
+        filename = os.path.splitext(os.path.basename(fn))[0]
+        
+        # Predict
+        mask, mask_indices = predict_img(net=net,
+                                       full_img=img,
+                                       scale_factor=scale_factor,
+                                       device=device)
+
+        # Save prediction
+        output_filename = os.path.join(output_folder, f'pred_{filename}.png')
+        result_img = Image.fromarray(mask)
+        result_img.save(output_filename)
+        
+        logging.info(f"Saved prediction to {output_filename}")
+
 def get_args():
-    parser = argparse.ArgumentParser(description='Predict masks from input images',
-                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser = argparse.ArgumentParser(description='Predict masks from input images')
     parser.add_argument('--model', '-m', default='MODEL.pth',
-                        metavar='FILE',
-                        help="Specify the file in which the model is stored")
-    parser.add_argument('--input', '-i', metavar='INPUT', nargs='+',
-                        help='filenames of input images', required=True)
-
-    parser.add_argument('--output', '-o', metavar='INPUT', nargs='+',
-                        help='Filenames of ouput images')
-    parser.add_argument('--viz', '-v', action='store_true',
-                        help="Visualize the images as they are processed",
-                        default=False)
-    parser.add_argument('--no-save', '-n', action='store_true',
-                        help="Do not save the output masks",
-                        default=False)
-    parser.add_argument('--mask-threshold', '-t', type=float,
-                        help="Minimum probability value to consider a mask pixel white",
-                        default=0.5)
-    parser.add_argument('--scale', '-s', type=float,
-                        help="Scale factor for the input images",
-                        default=1)
-
+                        metavar='FILE', help="Specify the file in which the model is stored")
+    parser.add_argument('--input', '-i', default='data/images/t1',
+                        help='Folder containing input images')
+    parser.add_argument('--output', '-o', default='predictions',
+                        help='Folder for output predictions')
+    parser.add_argument('--scale', '-s', type=float, default=1,
+                        help='Scale factor for the input images')
     return parser.parse_args()
 
 def RGB_2_class_idx(mask_to_be_converted):
@@ -166,78 +167,42 @@ def mask_to_image(mask):
     return Image.fromarray((mask * 255).astype(np.uint8))
 
 
-def compute_iou(predicted, actual,num_calsses):
-        intersection = 0
-        union = 0
-        iou=np.zeros((num_calsses-1),dtype=float)
-        for k in range(num_calsses-1):
-            a = (predicted == k).int()
-            b = (actual == k).int()
-            intersection = torch.sum(torch.mul(a, b))
-            union        = torch.sum(((a + b) > 0).int())
-            iou[k]=intersection/union
-        mean_iou=(1/(num_calsses-1))*np.sum(iou)
-        return mean_iou
+def compute_iou(predicted, actual, num_classes):
+    iou = torch.zeros(num_classes-1, dtype=torch.float32)
+    for k in range(num_classes-1):
+        a = (predicted == k)
+        b = (actual == k)
+        intersection = torch.logical_and(a, b).sum()
+        union = torch.logical_or(a, b).sum()
+        iou[k] = intersection.float() / (union.float() + 1e-8)
+    
+    return iou.mean().item()
 
+def get_device():
+    if torch.cuda.is_available():
+        return torch.device('cuda')
+    elif torch.backends.mps.is_available():
+        return torch.device('mps')
+    return torch.device('cpu')
 
 if __name__ == "__main__":
     args = get_args()
-    in_files = args.input
     
-    img_scale=args.scale
-    dir_mask='data/test_set_full_set/masks_test/'
-    # dir_mask='data/masks_subset/'
-    # dir_img='data/test_set_full_set/img_test/'
-    gt_list=[]
-    mask_dirs=sorted( filter( os.path.isfile, glob.glob(dir_mask+'*') ) )
-
-    for filename in mask_dirs:
-        mask = Image.open(filename)
-        resized_mask=preprocess_mask(mask, img_scale)      
-        mask=np.asarray(resized_mask)     
-        gt_list.append(mask)     
-    
-    gt_tensor=torch.Tensor(gt_list)
-    net = UNet(n_channels=3, n_classes=7)
-
-    logging.info("Loading model {}".format(args.model))
-
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = get_device()
     logging.info(f'Using device {device}')
     
+    # Load model
+    net = UNet(n_channels=3, n_classes=7)
+    logging.info(f"Loading model {args.model}")
     net.to(device=device)
     net.load_state_dict(torch.load(args.model, map_location=device))
-
-    logging.info("Model loaded !")
+    logging.info("Model loaded!")
     
-    for i, fn in enumerate(in_files):
-        logging.info("\nPredicting image {} ...".format(fn))
-
-        img = Image.open(fn)
-        
-        #Splitting input directory from the file name
-        name=fn.split('/')[-1]
-        #Removing the file extension
-        name=name.split('.')[0]
-        seg, mask_indices = predict_img(net=net,
-                           full_img=img,
-                           scale_factor=args.scale,
-                           out_threshold=args.mask_threshold,
-                           device=device)
-        
-        if i==0:
-          seg_array=mask_indices.unsqueeze(0)
-        else:
-          seg_array=torch.cat((seg_array,mask_indices.unsqueeze(0)),0)
-
-        if args.viz:
-          im = Image.fromarray(seg)
-          im.save(str(args.output[0])+'pred_'+name+'.jpeg')
-
-
-    #Metric Evaluation 
-    gt_tensor=RGB_2_class_idx(gt_tensor)
-    num_calsses=7
-    total_IoU = compute_iou(seg_array, gt_tensor,num_calsses=7)
+    # Predict on all images in the folder
+    predict_folder(net=net,
+                  input_folder=args.input,
+                  output_folder=args.output,
+                  device=device,
+                  scale_factor=args.scale)
     
-    print("IoU Value:",total_IoU)
+    logging.info("Prediction completed!")
