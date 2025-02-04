@@ -12,12 +12,14 @@ The original idea is to perform change detection by predicting two images from d
 #### Data
 Arrange your folders like this
 
+```
 data/
 ├── images/
 │   └── t1/
 │   └── t2/
 └── masks/
     └── change_masks_true/
+```
 
 Where t1 and t2 contain the images of the same areas at different time points, and change masks are our ground truth change masks.
 
