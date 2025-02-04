@@ -31,15 +31,15 @@ class BasicDataset(Dataset):
         assert newW > 0 and newH > 0, 'Scale is too small'
         pil_img = pil_img.resize((newW, newH))
 
-        img_nd = np.array(pil_img)
-
+        img_nd = np.asarray(pil_img)
+        
         if len(img_nd.shape) == 2:
             img_nd = np.expand_dims(img_nd, axis=2)
 
-        # HWC to CHW
-        img_trans = img_nd.transpose((2, 0, 1))
+        img_trans = img_nd.transpose((2, 0, 1)).astype(np.float32)
         if img_trans.max() > 1:
-            img_trans = img_trans / 255
+            img_trans = img_trans / 255.0
+            
         return img_trans
 
     def preprocess_mask(cls, pil_img, scale):
@@ -59,32 +59,27 @@ class BasicDataset(Dataset):
         return img_trans
 
     def RGB_2_class_idx(cls, mask_to_be_converted):
-        mapping = {(0  , 255, 255): 0,     #urban_land
-                   (255, 255, 0  ): 1,    #agriculture
-                   (255, 0  , 255): 2,    #rangeland
-                   (0  , 255, 0  ): 3,      #forest_land
-                   (0  , 0  , 255): 4,      #water
-                   (255, 255, 255):5,     #barren_land
-                   (0  , 0  , 0  ):6}           #unknown
-
-        # mapping = {(0.,1., 1.): 0,     #urban_land
-        #         (1., 1., 0.): 1,    #agriculture
-        #         (1., 0., 1.): 2,    #rangeland
-        #         (0., 1., 0.): 3,      #forest_land
-        #         (0., 0., 1.): 4,      #water
-        #         (1.,1.,1.):5,     #barren_land
-        #         (0.,0.,0.):6}           #unknown
-        temp = np.array(mask_to_be_converted)
-        temp = np.where(temp>=128, 255, 0)
-
-        class_mask=torch.from_numpy(temp)
+        temp = np.asarray(mask_to_be_converted)
+        temp = np.where(temp >= 128, 255, 0)
+        
+        class_mask = torch.from_numpy(temp)
         h, w = class_mask.shape[1], class_mask.shape[2]
-        mask_out = torch.zeros(h, w, dtype=torch.long)
-        for k in mapping:
-            idx = (class_mask == torch.tensor(k, dtype=torch.uint8).unsqueeze(1).unsqueeze(2))
-            validx = (idx.sum(0) == 3)
-            mask_out[validx] = torch.tensor(mapping[k], dtype=torch.long)
+        mask_out = torch.zeros((h, w), dtype=torch.long)
+        
+        mapping = {
+            (0  , 255, 255): 0,     #urban_land
+            (255, 255, 0  ): 1,     #agriculture
+            (255, 0  , 255): 2,     #rangeland
+            (0  , 255, 0  ): 3,     #forest_land
+            (0  , 0  , 255): 4,     #water
+            (255, 255, 255): 5,     #barren_land
+            (0  , 0  , 0  ): 6      #unknown
+        }
 
+        for k, v in mapping.items():
+            idx = torch.all(class_mask == torch.tensor(k, dtype=torch.uint8).view(3, 1, 1), dim=0)
+            mask_out[idx] = v
+            
         return mask_out
 
     def __getitem__(self, i):
@@ -106,9 +101,10 @@ class BasicDataset(Dataset):
         img = self.preprocess(img, self.scale)
         mask = self.preprocess_mask(mask, self.scale)
         mask = self.RGB_2_class_idx(mask)
+        
+        # Ensure float32 for MPS compatibility
         return {
-            'image': torch.from_numpy(img).type(torch.FloatTensor),
-            # 'mask': torch.from_numpy(mask).type(torch.FloatTensor)
+            'image': torch.from_numpy(img).type(torch.float32),
             'mask': mask
         }
 
